@@ -5,23 +5,34 @@
 [![study](https://img.shields.io/badge/study-174%20attempts%2C%20%240-orange)](https://scalingthoughts.com/groundhog/study.html)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-**Regression tests for your AI coding agent, built from your own git history.**
+**Change your coding agent without guessing.**
 
-You change your agent: a new model, a new system prompt, different tools, a
-new MCP server. Did it get better or worse on *your* code? Groundhog replays
-past fixes from your repository's history as tasks, races the agent before
-and after the change, and tells you with a paired significance test, the
-behaviour that moved, and every task that flipped.
+Groundhog turns past bugs and features from your git history into replayable
+tests for your coding agent. Switch the model, rewrite the prompt, add a tool
+or an MCP server, then run the same real tasks before and after: Groundhog
+tells you what got better, what got worse, and what broke.
 
-It scores an attempt as solved only if the target tests pass **and** every
-previously-passing test still passes **and** no test file was edited, so
-"passed the test, broke something else" never counts as a win.
+```
+before   Claude Code + Sonnet 5    36 real tasks, 7 repos    36/36 solved
+after    Claude Code + Haiku 4.5   the same 36 tasks         34/36 solved
+
+         2 tasks got worse, 0 got better: too few to call a real drop
+         attrs: passed its tests, broke 2 others   ← the one to read
+         jinja: ran out of time
+         Haiku cost 28% less, not the 50% its price suggests
+```
+
+That is a real run, not a mock-up ([`study/casestudy/`](study/casestudy/)).
+A fix only counts if the agent didn't fix one thing by breaking another, and
+didn't touch the tests. A harness that only checks the task's own tests
+would have scored that attrs attempt as solved.
 
 ## What an answer looks like
 
-A real question, run in public: *can we switch Claude Code from Sonnet 5 to
-the cheaper Haiku 4.5?* 36 tasks from seven upstream repositories,
-sandboxed, pre-registered ([`study/casestudy/`](study/casestudy/)):
+The question above, *can we switch Claude Code from Sonnet 5 to the cheaper
+Haiku 4.5?*, on 36 tasks from seven open-source repositories, with the agent
+sandboxed so it can't look up the answer. Here is `groundhog compare`'s
+output:
 
 ```
               PASS RATE            95% CI
@@ -45,13 +56,13 @@ solved by sonnet-5, not haiku-4.5  (why the other side failed)
   test on trio, fix all missing aclose related  timed out
 ```
 
-Read it the way the tool does: two tasks flipped, which 36 tasks cannot
-distinguish from noise, so the answer is "no detectable drop, and here are
-the two places to look". One of them passed its target tests while breaking
-two others; a harness that checks only the target tests would have scored
-it solved. Haiku cost 28% less in total, not the 50% its price suggests.
-The case study also caught an artifact in Groundhog itself, which a
-pre-registered follow-up confirmed and fixed; the write-up has both.
+In plain words: both setups got the same 34 tasks right, and only two tasks
+differ, which isn't enough to tell a real drop from luck. So the answer is
+"no clear drop, and here are the two tasks to look at". The statistics sit
+underneath (a paired test and intervals, so small differences aren't sold as
+results), but the question is yours. The case study also caught a mistake in
+Groundhog itself, which a follow-up run confirmed and fixed; the write-up has
+both.
 
 ## See it in ten seconds
 
@@ -98,12 +109,13 @@ instructions, pass them as a file outside the repository, for example
 Instruction files *inside* the repository (`CLAUDE.md`, `AGENTS.md`) come
 from each task's own commit, like the rest of the code.
 
-`compare` is paired: it looks only at tasks where the two setups disagree,
-which is what makes 30 to 50 tasks usable at all. It prints the behaviour
-that moved (broken tests, test edits, time, and for Groundhog's own tool
-loop, tool calls and errors) and every task that flipped with why the losing
-side failed. On 36 tasks, expect to detect large regressions, not small
-ones; `--repeats` runs each task several times when you need more.
+Because both runs use the same tasks, `compare` only has to look at the
+tasks where the two setups disagree, which is why 30 to 50 tasks are enough
+to catch a real regression. It shows what changed in how the agent worked
+(tests it broke, tests it edited, time taken, and for Groundhog's own tool
+loop, tool calls and errors) and every task that flipped, with why the losing
+side failed. On 36 tasks, expect to catch big regressions, not small ones;
+`--repeats` runs each task several times when you need more.
 
 ## In CI
 
