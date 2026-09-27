@@ -103,3 +103,37 @@ def test_report_step_forwards_no_color(monkeypatch, tmp_path):
     bench.main()
     report = next(cmd for cmd in seen if "report" in cmd)
     assert "--no-color" in report
+
+
+@pytest.mark.parametrize("mode", [["--models", "ollama:x"], ["--agent", "claude-code"],
+                                  ["--agent-cmd", "echo done"]])
+@pytest.mark.parametrize("forward_options", [False, True])
+def test_run_step_forwards_options(monkeypatch, tmp_path, mode, forward_options):
+    from groundhog import bench
+    seen = []
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.setattr(bench, "step", lambda title, cmd, colour: seen.append(cmd) or 0)
+    monkeypatch.setattr(bench, "count", lambda path: 1)
+    monkeypatch.setattr(bench.subprocess, "run", lambda *a, **k: None)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "tasks.jsonl").write_text("{}\n")
+    options = ["--commit-tests", "--no-patches", "--agent-timeout", "1800",
+               "--sample", "0", "--seed", "0", "--system-prompt", str(tmp_path / "prompt file.md"),
+               "--sandbox-deny", str(tmp_path / "other clone"),
+               "--sandbox-deny", str(tmp_path / "cache")]
+    monkeypatch.setattr(sys, "argv", ["bench", str(tmp_path), *mode,
+                       "--out-dir", str(out), * (options if forward_options else [])])
+    assert bench.main() == 0
+    run = next(cmd for cmd in seen if "run" in cmd)
+    for flag in ["--commit-tests", "--no-patches", "--agent-timeout", "--sample", "--seed",
+                 "--system-prompt", "--sandbox-deny"]:
+        assert (flag in run) == forward_options
+    if forward_options:
+        for flag, value in [("--agent-timeout", "1800"), ("--sample", "0"), ("--seed", "0"),
+                            ("--system-prompt", str(tmp_path / "prompt file.md"))]:
+            assert run[run.index(flag) + 1] == value
+        denied = [run[i+1] for i, value in enumerate(run) if value == "--sandbox-deny"]
+        assert denied == [str(tmp_path / "other clone"), str(tmp_path / "cache")]
+        report = next(cmd for cmd in seen if "report" in cmd)
+        assert not any(flag in report for flag in options if flag.startswith("--"))

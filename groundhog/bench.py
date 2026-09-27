@@ -92,6 +92,14 @@ def main() -> int:
     ap.add_argument("--agent-cmd", help="any external agent command")
     ap.add_argument("--sandbox", choices=("auto", "required", "off"), default="auto",
                     help="keep external agents away from the clone and cache (see run --help)")
+    ap.add_argument("--sandbox-deny", type=Path, action="append", default=[], metavar="PATH",
+                    help="additional paths to hide from external agents (repeatable)")
+    ap.add_argument("--commit-tests", action="store_true", help="deliver task tests as a commit")
+    ap.add_argument("--agent-timeout", type=int, help="seconds an external agent may run")
+    ap.add_argument("--sample", type=int, metavar="N", help="reproducible random subset of N tasks")
+    ap.add_argument("--seed", type=int, help="seed for --sample")
+    ap.add_argument("--system-prompt", type=Path, metavar="FILE", help="built-in loop system prompt")
+    ap.add_argument("--no-patches", action="store_true", help="do not save each attempt's diff")
     ap.add_argument("--since", default="12 months ago", help="how far back to mine")
     ap.add_argument("--limit", type=int, default=20, help="tasks to run (0 for all)")
     ap.add_argument("--repeats", type=int, default=1)
@@ -159,6 +167,15 @@ def main() -> int:
         run_cmd += ["--sandbox", cfg.sandbox]
     if cfg.max_spend is not None:
         run_cmd += ["--max-spend", str(cfg.max_spend)]
+    for name in ("agent_timeout", "sample", "seed", "system_prompt"):
+        value = getattr(cfg, name)
+        if value is not None:
+            run_cmd += ["--" + name.replace("_", "-"), str(value)]
+    for name in ("commit_tests", "no_patches"):
+        if getattr(cfg, name):
+            run_cmd.append("--" + name.replace("_", "-"))
+    for path in cfg.sandbox_deny:
+        run_cmd += ["--sandbox-deny", str(path)]
     run_cmd += env_flags(cfg)
     if results.exists() and count(results):
         run_cmd.append("--resume")
