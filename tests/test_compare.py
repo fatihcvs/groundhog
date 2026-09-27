@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+
+import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -89,3 +92,31 @@ def test_cli_prints_behaviour_and_writes_it_to_json(tmp_path):
     assert payload["behaviour"]["current"]["broke_tests"] == 0.5
     assert payload["lost"] == [{"task": "Fix t1", "why": "target passed, broke 1 other test(s)"}]
     assert payload["won"] == [{"task": "Fix t2", "why": "target tests still fail"}]
+
+
+@pytest.mark.parametrize("args,no_color,tty,expected_color", [
+    ([], None, False, False),
+    (["--no-color"], None, True, False),
+    ([], "1", True, False),
+    ([], "", True, True),
+    ([], None, True, True),
+])
+def test_cli_color_controls(tmp_path, args, no_color, tty, expected_color):
+    before = tmp_path / "before.jsonl"
+    after = tmp_path / "after.jsonl"
+    before.write_text(json.dumps(attempt("t1", True)) + "\n")
+    after.write_text(json.dumps(attempt("t1", False)) + "\n")
+    env = {k: v for k, v in os.environ.items() if k != "NO_COLOR"}
+    if no_color is not None:
+        env["NO_COLOR"] = no_color
+    script = ("import sys; from groundhog.compare import main; "
+              f"sys.stdout.isatty = lambda: {tty!r}; "
+              "raise SystemExit(main())")
+    done = subprocess.run([sys.executable, "-c", script, str(before), str(after),
+                           "--fail-under", "0.5", *args],
+                          capture_output=True, text=True, env=env,
+                          cwd=Path(__file__).resolve().parents[1])
+    assert done.returncode == 1, done.stderr
+    assert "PAIRED TEST" in done.stdout
+    assert "FAIL: pass rate" in done.stdout
+    assert ("\x1b[" in done.stdout) == expected_color

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -121,7 +122,10 @@ def main() -> int:
     ap.add_argument("--fail-on-regression", action="store_true",
                     help="exit 1 if the current run is significantly worse")
     ap.add_argument("--json", type=Path)
+    ap.add_argument("--no-color", action="store_true", help="plain text; also honours NO_COLOR")
     cfg = ap.parse_args()
+    colour = not cfg.no_color and not os.environ.get("NO_COLOR") and sys.stdout.isatty()
+    bold, dim, green, red, reset = (BOLD, DIM, GREEN, RED, RESET) if colour else ("", "", "", "", "")
 
     for path in (cfg.baseline, cfg.current):
         if not path.exists():
@@ -136,63 +140,63 @@ def main() -> int:
     stamps_a = {r.get("manifest", "") for r in a}
     stamps_b = {r.get("manifest", "") for r in b}
     if stamps_a and stamps_b and stamps_a != stamps_b and all(stamps_a | stamps_b):
-        print(f"\n{RED}WARNING: these runs used different task sets "
-              f"({', '.join(sorted(stamps_a))} vs {', '.join(sorted(stamps_b))}).{RESET}")
-        print(f"{DIM}  Only shared task ids are compared, so the result below is "
+        print(f"\n{red}WARNING: these runs used different task sets "
+              f"({', '.join(sorted(stamps_a))} vs {', '.join(sorted(stamps_b))}).{reset}")
+        print(f"{dim}  Only shared task ids are compared, so the result below is "
               f"a smaller\n  comparison than it appears. Pin one task set and "
-              f"re-run both arms.{RESET}")
+              f"re-run both arms.{reset}")
 
     result = mcnemar(a, b)
     lo_a, hi_a = wilson(round(result.a_rate * result.shared_tasks), result.shared_tasks)
     lo_b, hi_b = wilson(round(result.b_rate * result.shared_tasks), result.shared_tasks)
     delta = result.b_rate - result.a_rate
 
-    print(f"\n{BOLD}{'':<12}{'PASS RATE':>11}{'95% CI':>18}{RESET}")
+    print(f"\n{bold}{'':<12}{'PASS RATE':>11}{'95% CI':>18}{reset}")
     print(f"{cfg.label_a:<12}{result.a_rate:>10.0%}{f'{lo_a:.0%} – {hi_a:.0%}':>18}")
     print(f"{cfg.label_b:<12}{result.b_rate:>10.0%}{f'{lo_b:.0%} – {hi_b:.0%}':>18}")
 
-    colour = GREEN if delta > 0 else (RED if delta < 0 else "")
-    print(f"\n{colour}{'change':<12}{delta:>+10.0%}{RESET}   over {result.shared_tasks} shared tasks")
+    colour = green if delta > 0 else (red if delta < 0 else "")
+    print(f"\n{colour}{'change':<12}{delta:>+10.0%}{reset}   over {result.shared_tasks} shared tasks")
 
-    print(f"\n{BOLD}PAIRED TEST (McNemar, exact){RESET}")
+    print(f"\n{bold}PAIRED TEST (McNemar, exact){reset}")
     print(f"  solved by {cfg.label_a} only:  {result.a_only}")
     print(f"  solved by {cfg.label_b} only:  {result.b_only}")
     print(f"  solved by both:  {result.both}    neither: {result.neither}")
-    print(f"\n  {BOLD}{result.verdict(cfg.label_a, cfg.label_b)}{RESET}")
+    print(f"\n  {bold}{result.verdict(cfg.label_a, cfg.label_b)}{reset}")
 
     note = result.power_note()
     if note:
-        print(f"\n  {DIM}{note}{RESET}")
+        print(f"\n  {dim}{note}{reset}")
     if abs(delta) > 0 and not result.significant:
         need = tasks_needed(result.a_rate, abs(delta) or 0.05)
         if need:
-            print(f"  {DIM}An unpaired study of this effect would need ~{need} tasks; "
-                  f"you have {result.shared_tasks}.{RESET}")
+            print(f"  {dim}An unpaired study of this effect would need ~{need} tasks; "
+                  f"you have {result.shared_tasks}.{reset}")
 
     shared = set(outcomes(a)) & set(outcomes(b))
     a_shared = [r for r in a if r["task_id"] in shared]
     b_shared = [r for r in b if r["task_id"] in shared]
     ba, bb = behaviour(a_shared), behaviour(b_shared)
-    print(f"\n{BOLD}HOW THEY WORKED{RESET}  {DIM}per attempt, shared tasks only{RESET}")
-    print(f"{BOLD}{'':<26}{cfg.label_a:>12}{cfg.label_b:>12}{RESET}")
+    print(f"\n{bold}HOW THEY WORKED{reset}  {dim}per attempt, shared tasks only{reset}")
+    print(f"{bold}{'':<26}{cfg.label_a:>12}{cfg.label_b:>12}{reset}")
     for key, label, kind in BEHAVIOUR:
         if ba[key] is None and bb[key] is None:
             continue
         print(f"{label:<26}{fmt(ba[key], kind):>12}{fmt(bb[key], kind):>12}")
     if ba["median_calls"] is None and bb["median_calls"] is None:
-        print(f"{DIM}  Tool-call figures are recorded by the built-in loop only; "
-              f"external agents' calls are not visible to the harness.{RESET}")
+        print(f"{dim}  Tool-call figures are recorded by the built-in loop only; "
+              f"external agents' calls are not visible to the harness.{reset}")
 
     lost, won = flips(a, b)
-    for title, rows, colour in ((f"solved by {cfg.label_a}, not {cfg.label_b}", lost, RED),
-                                (f"solved by {cfg.label_b}, not {cfg.label_a}", won, GREEN)):
+    for title, rows, colour in ((f"solved by {cfg.label_a}, not {cfg.label_b}", lost, red),
+                                (f"solved by {cfg.label_b}, not {cfg.label_a}", won, green)):
         if not rows:
             continue
-        print(f"\n{BOLD}{title}{RESET}  {DIM}(why the other side failed){RESET}")
+        print(f"\n{bold}{title}{reset}  {dim}(why the other side failed){reset}")
         for subj, why in rows[:10]:
-            print(f"  {colour}{subj[:44]:<46}{RESET}{DIM}{why}{RESET}")
+            print(f"  {colour}{subj[:44]:<46}{reset}{dim}{why}{reset}")
         if len(rows) > 10:
-            print(f"  {DIM}... and {len(rows) - 10} more{RESET}")
+            print(f"  {dim}... and {len(rows) - 10} more{reset}")
 
     payload = {
         "baseline_rate": round(result.a_rate, 4),
@@ -212,11 +216,11 @@ def main() -> int:
 
     status = 0
     if cfg.fail_under is not None and result.b_rate < cfg.fail_under:
-        print(f"\n{RED}FAIL: pass rate {result.b_rate:.0%} is below the floor of "
-              f"{cfg.fail_under:.0%}{RESET}")
+        print(f"\n{red}FAIL: pass rate {result.b_rate:.0%} is below the floor of "
+              f"{cfg.fail_under:.0%}{reset}")
         status = 1
     if cfg.fail_on_regression and result.significant and result.b_rate < result.a_rate:
-        print(f"\n{RED}FAIL: significant regression (p = {result.p_value:.4f}){RESET}")
+        print(f"\n{red}FAIL: significant regression (p = {result.p_value:.4f}){reset}")
         status = 1
     print()
     return status
