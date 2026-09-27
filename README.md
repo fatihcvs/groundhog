@@ -5,16 +5,126 @@
 [![study](https://img.shields.io/badge/study-174%20attempts%2C%20%240-orange)](https://scalingthoughts.com/groundhog/study.html)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-**Your git history is an eval dataset. Most harnesses score it wrong.**
+**Regression tests for your AI coding agent, built from your own git history.**
 
-Groundhog mines coding-agent tasks from a repository's own commits, verifies
-each one by running its tests, and races agents against them on *your*
-codebase. It scores an attempt as solved only if the target tests pass **and**
-every previously-passing test still passes **and** no test file was edited.
+You change your agent: a new model, a new system prompt, different tools, a
+new MCP server. Did it get better or worse on *your* code? Groundhog replays
+past fixes from your repository's history as tasks, races the agent before
+and after the change, and tells you with a paired significance test, the
+behaviour that moved, and every task that flipped.
 
-That last clause is not pedantry. Here is a real attempt from
-[the study](study/REPORT.md): the task was "add `count_words()`", the agent
-was qwen2.5-coder:7b, and the target test passed.
+It scores an attempt as solved only if the target tests pass **and** every
+previously-passing test still passes **and** no test file was edited, so
+"passed the test, broke something else" never counts as a win.
+
+## What an answer looks like
+
+A real question, run in public: *can we switch Claude Code from Sonnet 5 to
+the cheaper Haiku 4.5?* 36 tasks from seven upstream repositories,
+sandboxed, pre-registered ([`study/casestudy/`](study/casestudy/)):
+
+```
+              PASS RATE            95% CI
+sonnet-5          100%        90% – 100%
+haiku-4.5          94%         82% – 98%
+
+PAIRED TEST (McNemar, exact)
+  solved by sonnet-5 only:  2
+  solved by haiku-4.5 only:  0
+  solved by both:  34    neither: 0
+
+  no detectable difference (p = 0.500)
+
+HOW THEY WORKED               sonnet-5   haiku-4.5
+target tests passed               100%         97%
+broke passing tests                 0%          6%
+median time                        69s         77s
+
+solved by sonnet-5, not haiku-4.5  (why the other side failed)
+  Expose converter as a decorator (#1541)       target passed, broke 2 other test(s)
+  test on trio, fix all missing aclose related  timed out
+```
+
+Read it the way the tool does: two tasks flipped, which 36 tasks cannot
+distinguish from noise, so the answer is "no detectable drop, and here are
+the two places to look". One of them passed its target tests while breaking
+two others; a harness that checks only the target tests would have scored
+it solved. Haiku cost 28% less in total, not the 50% its price suggests.
+The case study also caught an artifact in Groundhog itself, which a
+pre-registered follow-up confirmed and fixed; the write-up has both.
+
+## See it in ten seconds
+
+No API key, no network, nothing installed but [uv](https://docs.astral.sh/uv/):
+
+```bash
+uvx groundhog-eval demo
+```
+
+That builds a repository with real history, mines tasks from it, rejects a
+refactor because its tests passed without the fix, and runs four scripted
+agents. One applies the real fix. One applies the fix and breaks another
+module. One applies the fix and edits the test. One does nothing. Only the
+first scores. Captured output: [examples/demo-output.txt](examples/demo-output.txt).
+
+## Check a change to your agent
+
+```bash
+uv tool install groundhog-eval          # or: pip install groundhog-eval
+groundhog doctor                        # what this machine can run
+
+# 1. Baseline: mine, validate and race your current setup.
+groundhog bench ~/src/myrepo --agent claude-code
+
+# 2. Change one thing, then race the same pinned tasks again.
+groundhog run ~/src/myrepo --tasks .groundhog/myrepo/tasks.jsonl \
+    --agent-cmd 'claude -p {prompt} --permission-mode bypassPermissions --model claude-haiku-4-5' \
+    --models after --out .groundhog/myrepo/after.jsonl
+
+# 3. Did it help or hurt?
+groundhog compare .groundhog/myrepo/results.jsonl .groundhog/myrepo/after.jsonl --fail-on-regression
+```
+
+`bench` does mining, validation, the race and the report in one go, under
+`.groundhog/<repo>/`; the second invocation skips straight to the race, and a
+URL works anywhere a path does. Pinning `tasks.jsonl` is what makes the
+comparison fair: both arms see exactly the same tasks, and `compare` warns if
+they did not.
+
+What you can change is whatever your agent command takes: the model, flags,
+allowed tools, MCP config, an appended system prompt. To test new
+instructions, pass them as a file outside the repository, for example
+`--append-system-prompt-file ~/agent-configs/new-rules.md` for Claude Code.
+Instruction files *inside* the repository (`CLAUDE.md`, `AGENTS.md`) come
+from each task's own commit, like the rest of the code.
+
+`compare` is paired: it looks only at tasks where the two setups disagree,
+which is what makes 30 to 50 tasks usable at all. It prints the behaviour
+that moved (broken tests, test edits, time, and for Groundhog's own tool
+loop, tool calls and errors) and every task that flipped with why the losing
+side failed. On 36 tasks, expect to detect large regressions, not small
+ones; `--repeats` runs each task several times when you need more.
+
+## In CI
+
+```yaml
+- uses: abhinavsv3/groundhog@v1
+  with:
+    tasks: tasks/pinned.jsonl
+    baseline: results/baseline.jsonl
+    agent: claude-code
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+Runs when your agent config changes, writes the table to the job summary,
+fails on a significant regression. [docs/ci.md](docs/ci.md) covers pinning a
+task set, why the test is paired, and how to keep the cost sane.
+
+## Why the scoring is strict
+
+Here is a real attempt from [the study](study/REPORT.md): the task was "add
+`count_words()`", the agent was qwen2.5-coder:7b, and the target test passed.
 
 ```diff
 --- a/toolbox/text.py
@@ -48,77 +158,12 @@ openai:llama3.1:latest          2/38    1/38       +3pts   1 broke 1
 ```
 
 Every patch behind those numbers is in [`study/patches/`](study/patches/),
-and `groundhog show 87eb7a4e9b0c` prints the one above.
+and `groundhog show 87eb7a4e9b0c` prints the one above. A regression check
+that counted these as wins could tell you a worse agent is fine.
 
-## See it in ten seconds
+## Agents, models and languages
 
-No API key, no network, nothing installed but [uv](https://docs.astral.sh/uv/):
-
-```bash
-uvx groundhog-eval demo
-```
-
-That builds a repository with real history, mines tasks from it, rejects a
-refactor because its tests passed without the fix, and runs four scripted
-agents. One applies the real fix. One applies the fix and breaks another
-module. One applies the fix and edits the test. One does nothing. Only the
-first scores. Captured output: [examples/demo-output.txt](examples/demo-output.txt).
-
-## Run it on your own code
-
-```bash
-uv tool install groundhog-eval          # or: pip install groundhog-eval
-
-groundhog bench pallets/click --agent claude-code      # the agent you use
-groundhog bench ~/src/myrepo --models ollama:qwen3:8b  # a local model, $0
-groundhog doctor                                       # what this machine can run
-```
-
-`bench` mines, validates, runs and reports in one go, under
-`.groundhog/<repo>/`. The second invocation skips straight to the race. A URL
-works anywhere a path does; the clone is cached.
-
-What you get back, here from the study's own results file:
-
-```
-MODEL                       SOLVED   RATE         95% CI      COST   PER SOLVE   MEDIAN
----------------------------------------------------------------------------------------
-openai:qwen3:8b              17/38    45%      30% – 60%         -           -     412s
-openai:qwen2.5-coder:14b      8/22    36%      20% – 57%         -           -     111s
-openai:qwen2.5-coder:7b       3/38     8%       3% – 21%         -           -      45s
-openai:llama3.1:latest        1/38     3%       0% – 13%         -           -     111s
-openai:mistral:latest         0/38          not measured         —           —     168s
-
-  The top two intervals overlap — this ordering is not a result. Separating them
-  would need roughly 538 tasks (you have 38), or use `groundhog compare`
-  for a paired test, which needs far fewer.
-```
-
-Every rate carries a Wilson interval, because on a task set this size a gap
-of ten points usually is not one. The last row is a model whose output the
-harness could not read; it gets a refusal, not a 0%. You also get a Markdown copy for the pull request, a shields.io badge for the README,
-a standalone HTML leaderboard, every attempt's diff, and a per-task grid.
-Then `groundhog show <task>` for any attempt you want to understand, and
-`groundhog compare before.jsonl after.jsonl` for whether a change to your
-agent setup helped or hurt, with a paired significance test rather than two
-percentages subtracted, and how the agent's behaviour moved. Two local models
-from the study, both 0/8 on httpx, still differ plainly:
-
-```
-HOW THEY WORKED               qwen2.5       qwen3
-broke passing tests               25%         25%
-harness error/timeout              0%         12%
-median time                       49s        533s
-median tool calls                   4           5
-tool calls that errored           27%         48%
-calls parsed from prose          100%          0%
-```
-
-It also lists every task that flipped, with why the losing side failed.
-
-### Agents and models
-
-`--agent` runs the coding agent you actually use, in a throwaway worktree,
+`--agent` runs the coding agent you actually use, in a throwaway checkout,
 and grades what it left behind:
 
 | preset | verified | preset | verified |
@@ -138,9 +183,16 @@ under the OS sandbox (`sandbox-exec` on macOS, `bwrap` on Linux) with the
 clone, the cache, the task file and earlier patches unreadable, and a test
 checks that an agent which only tries to steal the answer scores 0. Each
 attempt records whether it was sandboxed, and the report flags any that were
-not. `groundhog doctor` shows whether this machine has one, a run without one prints a warning before it starts, and `--sandbox required` refuses to run at all; `--sandbox-deny PATH`
-covers another copy of the repo. The public repository on the network is
+not. `groundhog doctor` shows whether this
+machine has one, a run without one prints a warning before it starts, and
+`--sandbox required` refuses to run at all; `--sandbox-deny PATH` covers
+another copy of the repo. The public repository on the network is
 out of its reach, so a public repo's recent commits remain findable online.
+
+`--commit-tests` hands the agent the task's tests as a commit rather than as
+uncommitted changes. The case study found an agent reverting uncommitted
+tests as if they were stray edits; with them committed it never did
+([#59](../../issues/59) proposes making this the default).
 
 `--models` runs Groundhog's own small tool-calling loop against any model:
 
@@ -186,21 +238,38 @@ output. Test files are read-only. Scoring is
 FAIL_TO_PASS and PASS_TO_PASS, the same shape SWE-bench uses, and
 `groundhog export` writes SWE-bench instances.
 
-## In CI
+## One run is also a leaderboard
 
-```yaml
-- uses: abhinavsv3/groundhog@v1
-  with:
-    tasks: tasks/pinned.jsonl
-    baseline: results/baseline.jsonl
-    agent: claude-code
-  env:
-    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+Race several agents or models once, with no "before", and `report` ranks
+them. Here from the study's own results file:
+
+```
+MODEL                       SOLVED   RATE         95% CI      COST   PER SOLVE   MEDIAN
+---------------------------------------------------------------------------------------
+openai:qwen3:8b              17/38    45%      30% – 60%         -           -     412s
+openai:qwen2.5-coder:14b      8/22    36%      20% – 57%         -           -     111s
+openai:qwen2.5-coder:7b       3/38     8%       3% – 21%         -           -      45s
+openai:llama3.1:latest        1/38     3%       0% – 13%         -           -     111s
+openai:mistral:latest         0/38          not measured         —           —     168s
+
+  The top two intervals overlap — this ordering is not a result. Separating them
+  would need roughly 538 tasks (you have 38), or use `groundhog compare`
+  for a paired test, which needs far fewer.
 ```
 
-Runs when your agent config changes, writes the table to the job summary,
-fails on a significant regression. [docs/ci.md](docs/ci.md) covers pinning a
-task set, why the test is paired, and how to keep the cost sane.
+Every rate carries a Wilson interval, because on a task set this size a gap
+of ten points usually is not one. The last row is a model whose output the
+harness could not read; it gets a refusal, not a 0%. You also get a Markdown
+copy for the pull request, a shields.io badge, a standalone HTML page, every
+attempt's diff, and a per-task grid; `groundhog show <task>` opens any
+attempt.
+
+Public leaderboards are a weak substitute: across 122 SWE-bench submissions,
+repos agree on how to *rank* models (Spearman 0.86), but the median model
+swings 36 points between its best and worst repository. "75% on SWE-bench"
+says little about your repo. [docs/prior-art.md](docs/prior-art.md) has the
+analysis and where Groundhog sits next to SWE-smith, SWE-bench-Live and
+SWE-Factory.
 
 ## Groundhog on Groundhog
 
@@ -268,23 +337,13 @@ runs the repository's own install and test suite on your machine, so do not
 point this at code you do not trust. The full list, including the bugs that
 bit us, is in [docs/limitations.md](docs/limitations.md).
 
-## Why not read a leaderboard?
-
-We tested that premise and it mostly held: across 122 SWE-bench submissions,
-repos agree on how to *rank* models (Spearman 0.86). What does not transfer
-is the *number*: the median model swings 36 points between its best and
-worst repository. "75% on SWE-bench" says little about your repo.
-[docs/prior-art.md](docs/prior-art.md) has the analysis, the reproduction
-command, and where Groundhog sits next to SWE-smith, SWE-bench-Live and
-SWE-Factory.
-
 ## Contributing
 
-About 3,500 lines of stdlib Python in stages that each do one thing.
+About 5,300 lines of stdlib Python in stages that each do one thing.
 [CONTRIBUTING.md](CONTRIBUTING.md) explains how they fit. Most wanted:
-[verify an agent preset](../../issues/24),
-[validate a Rust crate](../../issues/31),
-[unittest-only Python repos](../../issues/37).
+[verify an agent preset](../../issues/39),
+[harder tasks](../../issues/62),
+[validate a Rust crate](../../issues/31).
 
 - [Good first issues](../../issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 - [Help wanted](../../issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)
